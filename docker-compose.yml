@@ -1,0 +1,46 @@
+services:
+  vicky-db:
+    image: postgres:16-alpine
+    container_name: vicky_os_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vicky
+      POSTGRES_PASSWORD: vickypass
+      POSTGRES_DB: vicky_os
+    ports:
+      - "5433:5432"
+    volumes:
+      - vicky_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vicky -d vicky_os"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  vicky-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vicky_os_backend
+    restart: unless-stopped
+    depends_on:
+      vicky-db:
+        condition: service_healthy
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8090
+      - DATABASE_URL=postgresql://vicky:vickypass@vicky-db:5432/vicky_os
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://192.168.1.20:11434}
+      - OLLAMA_TIMEOUT_SECONDS=60.0
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gemma3:4b}
+      - TECHY_MODEL=${TECHY_MODEL:-gemma3:4b}
+      - ELDER_MODEL=${ELDER_MODEL:-gemma3:4b}
+      - ARCHY_MODEL=${ARCHY_MODEL:-gemma3:4b}
+      - PA_MODEL=${PA_MODEL:-gemma3:4b}
+      - LOG_LEVEL=INFO
+    ports:
+      - "${PORT:-8090}:8090"
+
+volumes:
+  vicky_pgdata:
+    driver: local

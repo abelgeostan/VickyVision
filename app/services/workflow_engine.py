@@ -100,45 +100,76 @@ class OrganizationalWorkflowEngine:
 
     def classify_user_request(self, db: Session, user_message: str) -> UserRequestClassification:
         """Uses PA's context and LLM to classify user intent into a structured schema."""
-        lower = user_message.strip().lower()
-        words = lower.split()
+        raw_msg = user_message.strip()
+        first_line = raw_msg.splitlines()[0].strip() if raw_msg else ""
+        first_line_lower = first_line.lower()
+        # Remove greeting/PA prefix for intent analysis (e.g. "PA, give me...", "Hey PA, build...")
+        clean_first_line = re.sub(r"^(hey|hi|hello)?\s*(pa|vicky)?\s*[,:]?\s*", "", first_line_lower).strip()
 
-        # Immediate heuristics for conversational inquiries, status checks, and short follow-ups
-        inquiry_indicators = [
-            "is there", "are there", "list", "show", "explain", "overview", "what", "which",
-            "status", "how", "who", "where", "why", "tell me", "check", "describe",
-            "give me", "give", "help", "hello", "hi", "hey", "yes", "no", "ok", "okay",
-            "thanks", "thank you", "details", "info", "information", "ongoing", "summary"
-        ]
-        is_inquiry = any(lower.startswith(ind) or f" {ind} " in f" {lower} " for ind in inquiry_indicators)
+        words = clean_first_line.split()
 
-        # Constructive verbs indicating a new project
-        constructive_verbs = [
-            "build", "create", "develop", "implement", "deploy a", "setup a", "set up a",
-            "start a project", "new project", "design a system", "build a", "create a"
-        ]
-        has_constructive_verb = any(verb in lower for verb in constructive_verbs)
+        # 1. Direct Build / Project Directives (unambiguous requests to build or deploy software)
+        project_prefixes = (
+            "build ", "create ", "develop ", "implement ", "setup ", "set up ",
+            "deploy ", "design and build ", "design and implement ", "spin up ",
+            "start a project", "new project", "write an app", "write a service"
+        )
+        if any(clean_first_line.startswith(p) for p in project_prefixes) and len(raw_msg.split()) >= 3:
+            return UserRequestClassification(
+                intent_type="PROJECT",
+                summary=first_line[:80],
+                target_agent="archy",
+                requires_planning=True,
+                requires_elder_review=True,
+                confidence=0.98,
+            )
 
-        # Guard: Short messages (<= 3 words) or inquiries are NEVER a project
-        if is_inquiry or not has_constructive_verb or len(words) <= 3:
-            if any(lower.startswith(w) for w in ["restart", "stop", "reboot", "kill", "ps", "top", "free", "df"]):
-                return UserRequestClassification(
-                    intent_type="SIMPLE_TASK",
-                    summary=user_message,
-                    target_agent="techy",
-                    requires_planning=False,
-                    requires_elder_review=False,
-                    confidence=0.9,
-                )
+        # 2. Direct simple server tasks (one-off server administration commands)
+        simple_cmd_prefixes = (
+            "restart ", "reboot", "kill ", "systemctl ", "docker restart",
+            "docker stop", "docker ps", "ps aux", "free -m", "df -h", "top"
+        )
+        if any(clean_first_line.startswith(p) for p in simple_cmd_prefixes):
+            return UserRequestClassification(
+                intent_type="SIMPLE_TASK",
+                summary=first_line[:80],
+                target_agent="techy",
+                requires_planning=False,
+                requires_elder_review=False,
+                confidence=0.95,
+            )
+
+        # 3. Direct inquiries & conversational questions
+        inquiry_prefixes = (
+            "is there", "are there", "what is", "what are", "what was", "what were",
+            "who is", "who are", "where is", "where are", "how do", "how does", "how can",
+            "why is", "why does", "why are", "list ", "show ", "explain ", "describe ",
+            "tell me", "give me a list", "give me an overview", "give me the status",
+            "give me a concise overview", "can you tell", "can you show", "can you explain",
+            "do we have", "status of", "check the status"
+        )
+        if any(clean_first_line.startswith(p) for p in inquiry_prefixes):
             return UserRequestClassification(
                 intent_type="QUESTION",
-                summary=user_message,
+                summary=first_line[:80],
+                target_agent="pa",
+                requires_planning=False,
+                requires_elder_review=False,
+                confidence=0.95,
+            )
+
+        # 4. Short non-constructive inputs (<= 3 words, e.g. "give", "ok", "yes", "what", "status", "list", "hello")
+        if len(raw_msg.split()) <= 3:
+            return UserRequestClassification(
+                intent_type="QUESTION",
+                summary=raw_msg[:80],
                 target_agent="pa",
                 requires_planning=False,
                 requires_elder_review=False,
                 confidence=0.9,
             )
 
+        # 5. LLM Classification for nuanced requests
         system_prompt = (
             "You are PA, the Personal Assistant of VICKY OS.\n"
             "Classify the user's input into exactly one of:\n"
@@ -154,7 +185,7 @@ class OrganizationalWorkflowEngine:
             "}"
         )
 
-        prompt = f"User says: \"{user_message}\"\nClassify this input accurately:"
+        prompt = f"User says: \"{raw_msg[:400]}\"\nClassify this input accurately:"
 
         try:
             res = self.llm.generate(
@@ -168,7 +199,7 @@ class OrganizationalWorkflowEngine:
                 intent = parsed.get("intent_type")
                 return UserRequestClassification(
                     intent_type=intent,
-                    summary=parsed.get("summary", user_message[:100]),
+                    summary=parsed.get("summary", first_line[:80]),
                     target_agent=parsed.get("target_agent", "archy" if intent == "PROJECT" else "pa"),
                     requires_planning=(intent == "PROJECT"),
                     requires_elder_review=(intent == "PROJECT"),
@@ -178,10 +209,11 @@ class OrganizationalWorkflowEngine:
             logger.warning(f"Error classifying user input via LLM: {e}. Falling back to heuristic classifier.")
 
         # Heuristic fallback if LLM times out
-        if has_constructive_verb and len(words) > 3:
+        constructive_keywords = ["build", "create", "develop", "implement", "deploy", "setup", "web app", "application"]
+        if any(w in clean_first_line for w in constructive_keywords) and len(raw_msg.split()) >= 3:
             return UserRequestClassification(
                 intent_type="PROJECT",
-                summary=user_message,
+                summary=first_line[:80],
                 target_agent="archy",
                 requires_planning=True,
                 requires_elder_review=True,
@@ -190,7 +222,7 @@ class OrganizationalWorkflowEngine:
 
         return UserRequestClassification(
             intent_type="QUESTION",
-            summary=user_message,
+            summary=first_line[:80],
             target_agent="pa",
             requires_planning=False,
             requires_elder_review=False,
@@ -258,7 +290,7 @@ class OrganizationalWorkflowEngine:
             "1. Base your answer strictly on the LIVE SYSTEM GROUND TRUTH above.\n"
             "2. NEVER invent or hallucinate fictional projects (do NOT mention 'Project Phoenix', 'Alpha deployment', or any imaginary projects).\n"
             "3. If the user asks for a list, overview, or explanation of projects, present the exact projects from the database clearly with Markdown.\n"
-            "4. If the user says 'give', 'explain them', 'list them', or gives a brief follow-up, use the RECENT CONVERSATION HISTORY to understand what they are asking for and answer completely.\n"
+            "4. Answer questions specifically, directly, and concisely.\n"
             "5. Provide the COMPLETE and FINAL answer immediately. Never output placeholder phrases like 'Okay, generating...' or 'I will prepare an overview'. Deliver the actual overview now!\n"
             "6. Be direct, intelligent, concise, and helpful."
         )
@@ -280,8 +312,13 @@ class OrganizationalWorkflowEngine:
             logger.warning(f"Error generating PA answer via LLM: {e}")
 
         # Deterministic Fallback if LLM fails, times out, or gave placeholder
-        lower = user_message.lower()
-        if any(w in lower for w in ["project", "projects", "list", "give", "overview", "explain", "ongoing", "active"]):
+        lower = user_message.lower().strip()
+        asking_for_projects = (
+            any(w in lower for w in ["project", "projects"]) and
+            any(q in lower for q in ["list", "overview", "what", "show", "active", "ongoing", "status", "explain", "all", "current"])
+        ) or lower in ["projects", "list projects", "show projects", "give", "overview", "status", "explain"]
+
+        if asking_for_projects:
             if not projects:
                 return "There are currently no active or recorded projects in VICKY OS."
 
@@ -368,7 +405,7 @@ class OrganizationalWorkflowEngine:
                 prompt=prompt,
                 model=settings.ARCHY_MODEL,
                 system_prompt=system_prompt,
-                options={"temperature": 0.2, "num_predict": 1024},
+                options={"temperature": 0.2, "num_predict": 512},
             )
             plan_data = extract_json_from_llm(res.content)
         except Exception as e:
@@ -376,7 +413,8 @@ class OrganizationalWorkflowEngine:
 
         if not plan_data or "project_name" not in plan_data:
             # Fallback structured plan tailored to user goal
-            sanitized_name = user_goal[:50].replace('"', '').strip()
+            first_l = user_goal.splitlines()[0].replace('"', '').strip() if user_goal else "New System Project"
+            sanitized_name = first_l[:60].strip()
             plan_data = {
                 "project_name": sanitized_name.title(),
                 "objective": user_goal,
@@ -1075,7 +1113,8 @@ class OrganizationalWorkflowEngine:
         # If it is a PROJECT request
         # Step A: Initialize Project
         if not project_id:
-            proj_title = classification.summary[:80] if classification.summary else "New System Project"
+            first_line = user_message.strip().splitlines()[0].strip() if user_message else "New System Project"
+            proj_title = classification.summary[:80] if classification.summary else first_line[:80]
             project = ProjectService.create_project(
                 db,
                 ProjectCreate(
@@ -1083,7 +1122,7 @@ class OrganizationalWorkflowEngine:
                     description=user_message,
                     status="IDEA",
                     created_by="pa",
-                    objectives=[user_message],
+                    objectives=[first_line[:120]],
                     metadata_json={"source_request": user_message},
                 ),
             )

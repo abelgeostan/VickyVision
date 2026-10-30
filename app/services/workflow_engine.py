@@ -37,6 +37,7 @@ from app.services.decision_service import DecisionService
 from app.services.event_service import EventService
 from app.services.audit_service import AuditService
 from app.services.memory_service import MemoryService
+from app.services.message_service import MessageService
 from app.services.techy_agent import TechyAgentLoop
 from app.llm.base import BaseLLMProvider
 from app.llm.ollama import get_llm_provider
@@ -563,7 +564,23 @@ class OrganizationalWorkflowEngine:
                 "revised_milestones": [],
             }
 
-        revision = ArchyPlanRevision.model_validate(rev_data)
+        # Normalize revised_milestones in case LLM returned list of strings
+        if rev_data and "revised_milestones" in rev_data:
+            normalized_ms = []
+            for item in rev_data.get("revised_milestones", []):
+                if isinstance(item, str):
+                    normalized_ms.append({"title": item, "description": item, "tasks": []})
+                elif isinstance(item, dict):
+                    normalized_ms.append(item)
+            rev_data["revised_milestones"] = normalized_ms
+
+        try:
+            revision = ArchyPlanRevision.model_validate(rev_data)
+        except Exception as e:
+            logger.warning(f"Failed to validate Archy plan revision: {e}. Falling back to default.")
+            rev_data["revised_milestones"] = []
+            revision = ArchyPlanRevision.model_validate(rev_data)
+
         current_meta["proposed_architecture"] = revision.revised_architecture
         current_meta["revision_history"] = current_meta.get("revision_history", []) + [revision.model_dump()]
         project.metadata_json = current_meta
@@ -768,6 +785,15 @@ class OrganizationalWorkflowEngine:
                     f"**Techy Execution Report:**\n{techy_summary}\n\n"
                     f"All changes are active, logged in the audit trail, and stored in organizational memory."
                 )
+                MessageService.create_message(
+                    db,
+                    sender_id="pa",
+                    receiver_id="user",
+                    content=final_report,
+                    message_type="PA_RESPONSE",
+                    project_id=project.id,
+                    metadata_json={"action": "project_completed", "project_id": project.id},
+                )
                 return PAResponse(
                     message=final_report,
                     intent="PROJECT",
@@ -882,17 +908,44 @@ class OrganizationalWorkflowEngine:
         # Ensure default agents exist
         AgentService.init_default_agents(db)
 
+        # Persist user message in persistent conversation history
+        user_msg_rec = MessageService.create_message(
+            db,
+            sender_id="user",
+            receiver_id="pa",
+            content=user_message,
+            message_type="USER_REQUEST",
+            project_id=project_id,
+        )
+
         # 1. Classify
         classification = self.classify_user_request(db, user_message)
         logger.info(f"Classified user input as '{classification.intent_type}': {classification.summary}")
 
-        if classification.intent_type == "QUESTION" and classification.immediate_reply:
-            return PAResponse(
-                message=classification.immediate_reply,
+        if classification.intent_type == "QUESTION":
+            reply_text = classification.immediate_reply
+            if not reply_text:
+                org_status = self.get_organization_status(db)
+                reply_text = (
+                    f"Hello! VICKY OS is running with {org_status.active_projects_count} active projects, "
+                    f"{org_status.running_tasks_count} running tasks, and {org_status.pending_approvals_count} pending approvals. "
+                    f"How can the organization assist you?"
+                )
+            pa_response = PAResponse(
+                message=reply_text,
                 intent=classification.intent_type,
                 action_taken="Answered question directly from organizational context.",
                 severity="INFO",
             )
+            MessageService.create_message(
+                db,
+                sender_id="pa",
+                receiver_id="user",
+                content=pa_response.message,
+                message_type="PA_RESPONSE",
+                metadata_json=pa_response.model_dump(),
+            )
+            return pa_response
 
         # If it is a PROJECT request
         # Step A: Initialize Project
@@ -910,6 +963,9 @@ class OrganizationalWorkflowEngine:
                 ),
             )
             project_id = project.id
+            if user_msg_rec:
+                user_msg_rec.project_id = project_id
+                db.commit()
         else:
             project = ProjectService.get_project(db, project_id)
 
@@ -925,6 +981,16 @@ class OrganizationalWorkflowEngine:
 
         # Step E: PA presents proposal for human approval
         approval_req, pa_response = self.pa_present_for_approval(db, project_id=project_id)
+
+        MessageService.create_message(
+            db,
+            sender_id="pa",
+            receiver_id="user",
+            content=pa_response.message,
+            message_type="PA_RESPONSE",
+            project_id=pa_response.project_id,
+            metadata_json=pa_response.model_dump(),
+        )
 
         return pa_response
 

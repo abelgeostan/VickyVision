@@ -18,6 +18,12 @@ def register_event_subscriber(subscriber: EventSubscriber) -> None:
         _subscribers.append(subscriber)
 
 
+def unregister_event_subscriber(subscriber: EventSubscriber) -> None:
+    """Unregisters an event callback."""
+    if subscriber in _subscribers:
+        _subscribers.remove(subscriber)
+
+
 class EventService:
     @staticmethod
     def create_event(

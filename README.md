@@ -1,4 +1,4 @@
-# VICKY OS — Autonomous Multi-Agent AI Organization (Phases 1, 2 & 3)
+# VICKY OS — Autonomous Multi-Agent AI Organization (Phases 1, 2, 3 & 4)
 
 **VICKY OS** is a self-hosted, continuously running multi-agent AI organization platform running on local infrastructure, powered by local LLMs via Ollama and PostgreSQL.
 
@@ -10,6 +10,7 @@
   - **ARCHY** has the **vision** (transforms ideas into structured blueprints, milestones, tasks).
   - **ELDER** has the **wisdom** (evaluates architecture across 9 dimensions, recommends APPROVE/REVISE/REJECT).
   - **TECHY** has the **hands** (executes approved tasks on the live Ubuntu server using Phase 2 tools).
+- **Phase 4 (Command Center UI & Real-Time Event Streaming)**: Minimalistic, professional control center built with React 19, TypeScript, and Vite. Features PA chat, agent status monitor, inter-agent conversation explorer, project & task pipelines, executive human approvals gate, Techy live execution logs, server situational awareness, 5-category organizational memory, and Server-Sent Events (SSE) live activity stream.
 
 ---
 
@@ -218,19 +219,73 @@ python -m alembic upgrade head
 uvicorn app.main:app --host 0.0.0.0 --port 8090 --reload
 ```
 
+### Option 3: Running the Frontend Command Center (Phase 4)
+
+The Command Center is located in the `frontend/` directory (React 19, TypeScript, Vite, Tailwind CSS v4, Lucide React).
+
+```bash
+# 1. Navigate to frontend directory
+cd frontend
+
+# 2. Install dependencies (if not already installed)
+npm install
+
+# 3. Start development server (proxies /api to backend at http://127.0.0.1:8090)
+npm run dev
+
+# 4. Open in browser: http://localhost:5173
+```
+
+To build for production:
+```bash
+npm run build
+# Outputs optimized static bundle to frontend/dist/
+```
+
+To run frontend unit tests:
+```bash
+npm test
+```
+
 ---
 
 ## 🧪 Running Automated Tests
 
-Run the full pytest suite (43 tests covering Phase 1 core, Phase 2 Techy execution, and Phase 3 organizational workflows):
+### Backend Tests (44 Tests):
+Run the full pytest suite (covering Phase 1 core, Phase 2 Techy execution, Phase 3 organizational workflows, and Phase 4 SSE streaming):
 
 ```bash
-# Run unit and fast integration tests (43 passed in ~18s)
+# Run unit and fast integration tests (44 passed in ~25s)
 pytest -m "not slow" --ignore=tests/test_techy_vicky_integration.py -v
 
 # Run live VICKY server + Ollama end-to-end integration tests
 pytest tests/test_techy_vicky_integration.py -v -s
 ```
+
+### Frontend Tests (5 Tests):
+```bash
+cd frontend
+npm test
+```
+
+---
+
+## 💻 Frontend Command Center Features (Phase 4)
+
+The web UI provides situational awareness, transparent accountability, and direct human control over the AI organization:
+
+1. **Command Center (`/`)**: High-level organizational status, infrastructure health (Backend, Postgres, Ollama, Techy runtime, SSE stream), agent status cards, active projects, prominent pending approvals alert with 1-click decisions, live activity stream, and authority hierarchy graph.
+2. **PA Chat (`/chat`)**: First-class conversational liaison to VICKY OS. Classifies requests, delegates to Archy and Elder, presents inline project proposals with 1-click `[Approve]`, `[Request Changes]`, and `[Reject]` actions, displays background delegation stages, and stores persistent chat history in PostgreSQL.
+3. **Agents (`/agents`)**: Real-time status, model configurations, system prompts, core objectives, and responsibilities for PA, Archy, Elder, and Techy.
+4. **Conversation Explorer (`/conversations`)**: Unified chronological event and message stream across the entire organization. Filter by agent (`ALL`, `USER`, `PA`, `ARCHY`, `ELDER`, `TECHY`) and type (`MESSAGE`, `TASK`, `TOOL`, `DECISION`, `APPROVAL`, `EVENT`), with detail modal inspection.
+5. **Projects (`/projects`)**: Project index with status state machine tracking, architectural blueprints, milestones, tasks, decision records, and unified chronological timeline (`GET /api/org/projects/{id}/timeline`).
+6. **Tasks (`/tasks`)**: Operational work items, assigned agents, priorities, progress, execution steps, and verification outputs.
+7. **Human Approvals (`/approvals`)**: Executive gate for project blueprints and high-risk actions. Provides one-click decision submission (`APPROVE`, `REQUEST_CHANGES`, `REJECT`) with optional human feedback.
+8. **Techy Live Execution (`/execution`)**: Autonomous server engineer runtime monitor. Displays real tool invocations (`server.execute_command`, `docker.list_containers`, `service.logs`), arguments, execution durations, command outputs, and verification results. Also supports direct manual task dispatch.
+9. **Server Situational Awareness (`/server`)**: Hardware resource usage (CPU %, Memory %, Disk %), uptime, OS kernel, Docker container states, and discovered listening network ports from `/api/techy/discovery`.
+10. **Organizational Memory (`/memory`)**: 5 knowledge categories (`USER_PREFERENCE`, `PROJECT_FACT`, `ARCHITECTURAL_DECISION`, `SERVER_FACT`, `LESSON_LEARNED`) with search and category filtering.
+11. **Decision Records (`/decisions`)**: Governance audit trail with visual provenance flow (*User request → PA triage → Archy blueprint → Elder 9-dimension review → Human approval → Decision*).
+12. **Real-time Event Stream (SSE)**: Built on `GET /api/events/stream`, automatically refreshing active projects, tasks, approvals, and live activity without manual page reload.
 
 ---
 

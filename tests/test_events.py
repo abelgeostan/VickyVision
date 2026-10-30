@@ -20,3 +20,14 @@ def test_event_creation_and_listing(client):
     get_res = client.get(f"/api/events/{evt_id}")
     assert get_res.status_code == 200
     assert get_res.json()["source"] == "host_monitor"
+
+
+def test_event_stream_endpoint(client):
+    """Verify that /api/events/stream returns text/event-stream content type and initial ping."""
+    res = client.get("/api/events/stream?once=true")
+    assert res.status_code == 200
+    assert "text/event-stream" in res.headers["content-type"]
+    assert ": connected" in res.text
+
+
+

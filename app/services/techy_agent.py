@@ -56,7 +56,7 @@ class TechyAgentLoop:
         json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
         if json_match:
             try:
-                return json.loads(json_match.group(1)), None
+                return json.loads(json_match.group(1), strict=False), None
             except json.JSONDecodeError:
                 pass
 
@@ -66,7 +66,7 @@ class TechyAgentLoop:
         if start != -1 and end != -1 and end > start:
             candidate = text[start : end + 1]
             try:
-                return json.loads(candidate), None
+                return json.loads(candidate, strict=False), None
             except json.JSONDecodeError as err:
                 return None, f"JSON syntax error: {str(err)}"
 

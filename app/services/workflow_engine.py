@@ -415,6 +415,78 @@ class OrganizationalWorkflowEngine:
             # Fallback structured plan tailored to user goal
             first_l = user_goal.splitlines()[0].replace('"', '').strip() if user_goal else "New System Project"
             sanitized_name = first_l[:60].strip()
+            is_frontend_app = any(k in user_goal.lower() for k in ["react", "vite", "frontend", "web app", "calculator", "tailwind", "typescript", "javascript", "ui", "dashboard"])
+            if is_frontend_app:
+                tech_stack = "React + TypeScript + Vite + Tailwind CSS containerized with Docker & Nginx"
+                impl_lang = "TypeScript / React (Node.js build stage, Nginx runtime)"
+                milestones_list = [
+                    {
+                        "title": "Milestone 1: Application Scaffolding & Code Implementation",
+                        "description": f"Create project assets and write application code for {sanitized_name}",
+                        "tasks": [{
+                            "title": f"Scaffold and implement application code for {sanitized_name}",
+                            "description": "Create application directory under /home/vickyops/apps, write React/TypeScript source components, configuration, styles, and basic tests according to requirements.",
+                            "priority": "HIGH",
+                            "assignee": "techy",
+                            "expected_result": "Application source code and tests successfully created",
+                            "estimated_complexity": "MEDIUM",
+                        }],
+                    },
+                    {
+                        "title": "Milestone 2: Dockerization & Deployment",
+                        "description": f"Containerize and deploy {sanitized_name} on an unused host port",
+                        "tasks": [{
+                            "title": f"Build and launch Docker container for {sanitized_name}",
+                            "description": "Write Dockerfile and docker-compose.yml mapping to an unused available host port (e.g. 3025), execute docker compose up -d --build, and verify container runs.",
+                            "priority": "HIGH",
+                            "assignee": "techy",
+                            "expected_result": "Docker container built and running cleanly",
+                            "estimated_complexity": "HIGH",
+                        }],
+                    },
+                    {
+                        "title": "Milestone 3: Health Verification & Service Validation",
+                        "description": f"Verify HTTP status and accessibility for {sanitized_name}",
+                        "tasks": [{
+                            "title": f"Verify HTTP availability and responsiveness for {sanitized_name}",
+                            "description": "Send HTTP request to the deployed port, verify 200 OK status, inspect container logs for errors, and report the live access URL.",
+                            "priority": "HIGH",
+                            "assignee": "techy",
+                            "expected_result": "Application responds with HTTP 200 on server host port",
+                            "estimated_complexity": "LOW",
+                        }],
+                    },
+                ]
+            else:
+                tech_stack = "Containerized lightweight service running under Docker Compose on VICKY server with REST health checks."
+                impl_lang = "Python"
+                milestones_list = [
+                    {
+                        "title": "Milestone 1: Environment Discovery & Configuration",
+                        "description": "Inspect server environment and prepare configuration",
+                        "tasks": [{
+                            "title": f"Inspect server resources and dependencies for {sanitized_name}",
+                            "description": "Run server inspection to ensure adequate CPU, RAM, and Docker status",
+                            "priority": "HIGH",
+                            "assignee": "techy",
+                            "expected_result": "Resource and port availability confirmed",
+                            "estimated_complexity": "LOW",
+                        }],
+                    },
+                    {
+                        "title": "Milestone 2: Service Deployment & Verification",
+                        "description": "Deploy required service assets and verify runtime health",
+                        "tasks": [{
+                            "title": f"Execute deployment and verification for {sanitized_name}",
+                            "description": "Perform deployment verification and check process responsiveness",
+                            "priority": "HIGH",
+                            "assignee": "techy",
+                            "expected_result": "Service operating with zero critical errors",
+                            "estimated_complexity": "MEDIUM",
+                        }],
+                    },
+                ]
+
             plan_data = {
                 "project_name": sanitized_name.title(),
                 "objective": user_goal,
@@ -428,7 +500,7 @@ class OrganizationalWorkflowEngine:
                     "Minimal server resource overhead (< 150MB RAM)",
                     "Graceful recovery and error logging",
                 ],
-                "proposed_architecture": "Containerized lightweight service running under Docker Compose on VICKY server with REST health checks.",
+                "proposed_architecture": tech_stack,
                 "technology_choices": [
                     {
                         "component": "Service Runtime",
@@ -438,43 +510,14 @@ class OrganizationalWorkflowEngine:
                     },
                     {
                         "component": "Implementation Language",
-                        "choice": "Python",
-                        "reason": "Clean integration with VICKY OS toolchain and server environment",
-                        "alternatives": ["Bash", "Node.js"],
+                        "choice": impl_lang,
+                        "reason": "Tailored to project requirements and server environment",
+                        "alternatives": ["Python", "Node.js"],
                     },
                 ],
-                "components": [{"name": "Core Service", "type": "backend_daemon"}],
-                "dependencies": ["docker", "python3"],
-                "milestones": [
-                    {
-                        "title": "Milestone 1: Environment Discovery & Configuration",
-                        "description": "Inspect server environment and prepare configuration",
-                        "tasks": [
-                            {
-                                "title": f"Inspect server resources and dependencies for {sanitized_name}",
-                                "description": "Run server inspection to ensure adequate CPU, RAM, and Docker status",
-                                "priority": "HIGH",
-                                "assignee": "techy",
-                                "expected_result": "Resource and port availability confirmed",
-                                "estimated_complexity": "LOW",
-                            }
-                        ],
-                    },
-                    {
-                        "title": "Milestone 2: Service Deployment & Verification",
-                        "description": "Deploy required service assets and verify runtime health",
-                        "tasks": [
-                            {
-                                "title": f"Execute deployment and verification for {sanitized_name}",
-                                "description": "Perform deployment verification and check process responsiveness",
-                                "priority": "HIGH",
-                                "assignee": "techy",
-                                "expected_result": "Service operating with zero critical errors",
-                                "estimated_complexity": "MEDIUM",
-                            }
-                        ],
-                    },
-                ],
+                "components": [{"name": "Core Service", "type": "frontend_or_backend"}],
+                "dependencies": ["docker", "docker-compose"],
+                "milestones": milestones_list,
                 "risks": ["Port conflict if service requires already occupied host port"],
                 "assumptions": ["Docker daemon is active and user has container execution rights"],
                 "estimated_complexity": "MEDIUM",
@@ -1014,9 +1057,11 @@ class OrganizationalWorkflowEngine:
 
             instruction = (
                 f"Task: {task.title}\n"
-                f"Context: Project '{project.name}'\n"
-                f"Description: {task.description or 'Execute and verify.'}\n"
-                f"Perform the necessary server inspection/operations and verify results."
+                f"Project: '{project.name}'\n"
+                f"Project Specifications & Requirements:\n{project.description or ''}\n\n"
+                f"Task Details: {task.description or 'Execute, implement, or verify as required.'}\n"
+                f"Proposed Architecture: {project.metadata_json.get('proposed_architecture', '') if project.metadata_json else ''}\n\n"
+                f"Perform the necessary real-world server operations using your tools (e.g. command.execute, file.write, docker) and verify results."
             )
 
             try:
@@ -1025,18 +1070,22 @@ class OrganizationalWorkflowEngine:
                     instruction=instruction,
                     task_id=task.id,
                     project_id=project.id,
-                    max_steps=4,
+                    max_steps=settings.TECHY_MAX_STEPS,
                 )
 
                 if res.success or res.status in ("COMPLETED", "SUCCESS"):
                     task.status = "COMPLETED"
                     task.progress = 100
                     task.completed_at = datetime.now(timezone.utc)
+                    task.result_summary = res.final_answer
                     reports.append(f"✅ **{task.title}**: Completed ({res.steps_count} steps executed)")
                 else:
-                    task.status = "COMPLETED"  # Even if max steps reached, we record completion with summary
-                    task.progress = 100
-                    reports.append(f"ℹ️ **{task.title}**: Executed ({res.steps_count} steps: {res.final_answer[:120]}...)")
+                    task.status = "FAILED" if res.status == "FAILED" else "BLOCKED"
+                    task.progress = 50
+                    task.error = res.final_answer
+                    task.result_summary = res.final_answer
+                    reports.append(f"⚠️ **{task.title}**: {task.status} ({res.steps_count} steps: {res.final_answer[:150]})")
+                    overall_success = False
                 db.commit()
 
             except Exception as e:
@@ -1050,9 +1099,13 @@ class OrganizationalWorkflowEngine:
         # Mark parent milestone tasks as completed if child tasks succeeded
         parent_tasks = [t for t in tasks if t.parent_task_id is None]
         for p in parent_tasks:
-            p.status = "COMPLETED"
-            p.progress = 100
-            p.completed_at = datetime.now(timezone.utc)
+            if overall_success:
+                p.status = "COMPLETED"
+                p.progress = 100
+                p.completed_at = datetime.now(timezone.utc)
+            else:
+                p.status = "BLOCKED"
+                p.progress = 50
         db.commit()
 
         summary_text = "\n".join(reports)

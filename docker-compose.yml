@@ -41,6 +41,17 @@ services:
     ports:
       - "${PORT:-8090}:8090"
 
+  vicky-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: vicky_os_frontend
+    restart: unless-stopped
+    depends_on:
+      - vicky-backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+
 volumes:
   vicky_pgdata:
     driver: local

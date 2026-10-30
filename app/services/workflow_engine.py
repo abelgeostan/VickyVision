@@ -13,6 +13,7 @@ from app.models.approval import ApprovalRequest
 from app.models.decision import DecisionRecord
 from app.models.event import Event
 from app.models.memory import Memory
+from app.models.message import Message
 from app.schemas.organization import (
     UserRequestClassification,
     ArchyProjectPlan,
@@ -99,24 +100,57 @@ class OrganizationalWorkflowEngine:
 
     def classify_user_request(self, db: Session, user_message: str) -> UserRequestClassification:
         """Uses PA's context and LLM to classify user intent into a structured schema."""
-        pa_agent = AgentService.get_agent(db, "pa")
+        lower = user_message.strip().lower()
+        words = lower.split()
+
+        # Immediate heuristics for conversational inquiries, status checks, and short follow-ups
+        inquiry_indicators = [
+            "is there", "are there", "list", "show", "explain", "overview", "what", "which",
+            "status", "how", "who", "where", "why", "tell me", "check", "describe",
+            "give me", "give", "help", "hello", "hi", "hey", "yes", "no", "ok", "okay",
+            "thanks", "thank you", "details", "info", "information", "ongoing", "summary"
+        ]
+        is_inquiry = any(lower.startswith(ind) or f" {ind} " in f" {lower} " for ind in inquiry_indicators)
+
+        # Constructive verbs indicating a new project
+        constructive_verbs = [
+            "build", "create", "develop", "implement", "deploy a", "setup a", "set up a",
+            "start a project", "new project", "design a system", "build a", "create a"
+        ]
+        has_constructive_verb = any(verb in lower for verb in constructive_verbs)
+
+        # Guard: Short messages (<= 3 words) or inquiries are NEVER a project
+        if is_inquiry or not has_constructive_verb or len(words) <= 3:
+            if any(lower.startswith(w) for w in ["restart", "stop", "reboot", "kill", "ps", "top", "free", "df"]):
+                return UserRequestClassification(
+                    intent_type="SIMPLE_TASK",
+                    summary=user_message,
+                    target_agent="techy",
+                    requires_planning=False,
+                    requires_elder_review=False,
+                    confidence=0.9,
+                )
+            return UserRequestClassification(
+                intent_type="QUESTION",
+                summary=user_message,
+                target_agent="pa",
+                requires_planning=False,
+                requires_elder_review=False,
+                confidence=0.9,
+            )
+
         system_prompt = (
             "You are PA, the Personal Assistant of VICKY OS.\n"
-            "Analyze the user's input and classify their intent into exactly one of:\n"
-            "- PROJECT: Request to build, implement, design, or deploy a new service, system, application, or workflow.\n"
+            "Classify the user's input into exactly one of:\n"
+            "- PROJECT: Request to build, implement, design, or deploy a NEW software system, application, or service.\n"
             "- SIMPLE_TASK: A discrete one-off command or task (e.g. 'restart nginx', 'check disk space').\n"
-            "- QUESTION: Inquiry regarding status, information, explainability, or general questions.\n"
-            "- DECISION_REQUEST: Asking for advice or trade-off evaluation.\n"
-            "- TECH_COMMAND: Direct low-level server command request.\n\n"
+            "- QUESTION: Inquiry regarding status, projects, tasks, explanation, overview, or general questions.\n\n"
             "Return ONLY a valid JSON object with the following structure:\n"
             "{\n"
-            '  "intent_type": "PROJECT" | "SIMPLE_TASK" | "QUESTION" | "DECISION_REQUEST" | "TECH_COMMAND",\n'
+            '  "intent_type": "PROJECT" | "SIMPLE_TASK" | "QUESTION",\n'
             '  "summary": "<one sentence summary of what user wants>",\n'
-            '  "target_agent": "pa" | "archy" | "elder" | "techy",\n'
-            '  "requires_planning": true | false,\n'
-            '  "requires_elder_review": true | false,\n'
-            '  "immediate_reply": "<friendly reply if question, else null>",\n'
-            '  "confidence": 0.95\n'
+            '  "target_agent": "pa" | "archy" | "techy",\n'
+            '  "requires_planning": true | false\n'
             "}"
         )
 
@@ -127,25 +161,24 @@ class OrganizationalWorkflowEngine:
                 prompt=prompt,
                 model=settings.PA_MODEL,
                 system_prompt=system_prompt,
-                options={"temperature": 0.1, "num_predict": 256},
+                options={"temperature": 0.1, "num_predict": 128},
             )
             parsed = extract_json_from_llm(res.content)
-            if parsed and "intent_type" in parsed:
+            if parsed and parsed.get("intent_type") in ("PROJECT", "SIMPLE_TASK", "QUESTION"):
+                intent = parsed.get("intent_type")
                 return UserRequestClassification(
-                    intent_type=parsed.get("intent_type", "PROJECT"),
+                    intent_type=intent,
                     summary=parsed.get("summary", user_message[:100]),
-                    target_agent=parsed.get("target_agent", "archy"),
-                    requires_planning=parsed.get("requires_planning", True),
-                    requires_elder_review=parsed.get("requires_elder_review", True),
-                    immediate_reply=parsed.get("immediate_reply"),
+                    target_agent=parsed.get("target_agent", "archy" if intent == "PROJECT" else "pa"),
+                    requires_planning=(intent == "PROJECT"),
+                    requires_elder_review=(intent == "PROJECT"),
                     confidence=float(parsed.get("confidence", 0.9)),
                 )
         except Exception as e:
             logger.warning(f"Error classifying user input via LLM: {e}. Falling back to heuristic classifier.")
 
-        # Heuristic fallback if LLM times out or returns unparseable text
-        lower = user_message.lower()
-        if any(w in lower for w in ["build", "create", "setup", "set up", "develop", "implement", "deploy a", "system"]):
+        # Heuristic fallback if LLM times out
+        if has_constructive_verb and len(words) > 3:
             return UserRequestClassification(
                 intent_type="PROJECT",
                 summary=user_message,
@@ -154,25 +187,124 @@ class OrganizationalWorkflowEngine:
                 requires_elder_review=True,
                 confidence=0.85,
             )
-        elif any(w in lower for w in ["check", "status", "why", "how", "what", "where", "list"]):
-            return UserRequestClassification(
-                intent_type="QUESTION",
-                summary=user_message,
-                target_agent="pa",
-                requires_planning=False,
-                requires_elder_review=False,
-                immediate_reply=f"I checked the system for: '{user_message}'. All core services are operating normally.",
-                confidence=0.8,
+
+        return UserRequestClassification(
+            intent_type="QUESTION",
+            summary=user_message,
+            target_agent="pa",
+            requires_planning=False,
+            requires_elder_review=False,
+            confidence=0.8,
+        )
+
+    def pa_answer_query(self, db: Session, user_message: str) -> str:
+        """
+        Generates an intelligent, grounded response from PA using real database state:
+        - Real projects, statuses, and goals (no fictional 'Project Phoenix').
+        - Real tasks and pending approvals.
+        - Recent chat history for context continuity.
+        - Complete Markdown responses (no empty 'Okay, generating...' placeholders).
+        """
+        projects = ProjectService.list_projects(db)
+        pending_approvals = ApprovalService.list_requests(db, status="PENDING")
+        tasks = TaskService.list_tasks(db)
+        running_tasks = [t for t in tasks if t.status == "RUNNING"]
+        agents = AgentService.list_agents(db)
+
+        # Recent conversation history
+        recent_msgs = db.query(Message).order_by(desc(Message.created_at)).limit(6).all()
+        recent_msgs.reverse()
+        history_lines = []
+        for m in recent_msgs:
+            sender = "YOU" if m.sender_id == "user" else m.sender_id.upper()
+            history_lines.append(f"{sender}: {m.content[:200]}")
+        history_str = "\n".join(history_lines) if history_lines else "(No prior conversation)"
+
+        # Format real projects
+        projects_summary = []
+        for p in projects:
+            p_tasks = [t for t in tasks if t.project_id == p.id]
+            completed_tasks = len([t for t in p_tasks if t.status == "COMPLETED"])
+            total_tasks = len(p_tasks)
+            p_agent = "Techy" if p.status in ("EXECUTING", "VERIFYING", "COMPLETED") else ("Archy / Elder" if p.status in ("PLANNING", "REVIEW") else "PA")
+            projects_summary.append(
+                f"- Project: **{p.name}**\n"
+                f"  - Status: {p.status}\n"
+                f"  - Main Goal: {p.description or 'No description'}\n"
+                f"  - Progress: {completed_tasks}/{total_tasks} tasks completed\n"
+                f"  - Current Agent Responsible: {p_agent}\n"
+                f"  - Created: {p.created_at.strftime('%Y-%m-%d %H:%M') if p.created_at else 'Unknown'}\n"
+                f"  - Objectives: {', '.join(p.objectives) if p.objectives else 'Standard deployment'}"
             )
-        else:
-            return UserRequestClassification(
-                intent_type="PROJECT",
-                summary=user_message,
-                target_agent="archy",
-                requires_planning=True,
-                requires_elder_review=True,
-                confidence=0.75,
+        projects_str = "\n".join(projects_summary) if projects_summary else "No projects currently in VICKY OS database."
+
+        approvals_str = "\n".join([f"- Approval: {a.action} (Risk: {a.risk_level}, Status: {a.status})" for a in pending_approvals]) if pending_approvals else "None"
+        tasks_str = "\n".join([f"- Task: {t.title} (Assigned: {t.assigned_to}, Progress: {t.progress}%)" for t in running_tasks]) if running_tasks else "None"
+        agents_str = ", ".join([f"{a.name} ({a.role}: {a.status})" for a in agents])
+
+        system_prompt = (
+            "You are PA (Personal Assistant), the primary interface and organizational liaison of VICKY OS.\n"
+            "You speak directly to the human operator (YOU).\n\n"
+            "LIVE SYSTEM GROUND TRUTH (FROM DATABASE):\n"
+            f"=== PROJECTS ({len(projects)}) ===\n"
+            f"{projects_str}\n\n"
+            f"=== PENDING APPROVALS ({len(pending_approvals)}) ===\n"
+            f"{approvals_str}\n\n"
+            f"=== RUNNING TASKS ({len(running_tasks)}) ===\n"
+            f"{tasks_str}\n\n"
+            f"=== AGENTS ===\n"
+            f"{agents_str}\n\n"
+            "CRITICAL INSTRUCTIONS:\n"
+            "1. Base your answer strictly on the LIVE SYSTEM GROUND TRUTH above.\n"
+            "2. NEVER invent or hallucinate fictional projects (do NOT mention 'Project Phoenix', 'Alpha deployment', or any imaginary projects).\n"
+            "3. If the user asks for a list, overview, or explanation of projects, present the exact projects from the database clearly with Markdown.\n"
+            "4. If the user says 'give', 'explain them', 'list them', or gives a brief follow-up, use the RECENT CONVERSATION HISTORY to understand what they are asking for and answer completely.\n"
+            "5. Provide the COMPLETE and FINAL answer immediately. Never output placeholder phrases like 'Okay, generating...' or 'I will prepare an overview'. Deliver the actual overview now!\n"
+            "6. Be direct, intelligent, concise, and helpful."
+        )
+
+        user_prompt = f"RECENT CONVERSATION HISTORY:\n{history_str}\n\nUSER MESSAGE:\n\"{user_message}\"\n\nPA Response:"
+
+        try:
+            res = self.llm.generate(
+                prompt=user_prompt,
+                model=settings.PA_MODEL,
+                system_prompt=system_prompt,
+                options={"temperature": 0.2, "num_predict": 1024},
             )
+            answer = res.content.strip()
+            # Guard against placeholder responses
+            if answer and not any(answer.lower().startswith(p) for p in ["okay, generating", "generating an overview", "i am generating", "i will generate", "generating a concise"]):
+                return answer
+        except Exception as e:
+            logger.warning(f"Error generating PA answer via LLM: {e}")
+
+        # Deterministic Fallback if LLM fails, times out, or gave placeholder
+        lower = user_message.lower()
+        if any(w in lower for w in ["project", "projects", "list", "give", "overview", "explain", "ongoing", "active"]):
+            if not projects:
+                return "There are currently no active or recorded projects in VICKY OS."
+
+            lines = ["Here is the current overview of projects in VICKY OS:\n"]
+            for p in projects:
+                lines.append(f"### • **{p.name}**")
+                lines.append(f"- **Status:** `{p.status}`")
+                lines.append(f"- **Goal:** {p.description or 'No description provided'}")
+                p_tasks = [t for t in tasks if t.project_id == p.id]
+                completed_t = len([t for t in p_tasks if t.status == 'COMPLETED'])
+                p_agent = "Techy" if p.status in ("EXECUTING", "VERIFYING", "COMPLETED") else ("Archy / Elder" if p.status in ("PLANNING", "REVIEW") else "PA")
+                lines.append(f"- **Progress:** {completed_t}/{len(p_tasks)} tasks completed")
+                lines.append(f"- **Responsible Agent:** {p_agent}")
+                lines.append(f"- **Created:** {p.created_at.strftime('%b %d, %Y') if p.created_at else 'Unknown'}\n")
+            return "\n".join(lines)
+
+        return (
+            f"VICKY OS is running smoothly with **{len(projects)} projects**, "
+            f"**{len(running_tasks)} running tasks**, and **{len(pending_approvals)} pending approvals**.\n\n"
+            f"Agents status: {agents_str}.\n"
+            "How can I assist you with the organization or server?"
+        )
+
 
     # =========================================================================
     # 2. ARCHY: PROJECT BLUEPRINT PLANNING
@@ -922,19 +1054,12 @@ class OrganizationalWorkflowEngine:
         classification = self.classify_user_request(db, user_message)
         logger.info(f"Classified user input as '{classification.intent_type}': {classification.summary}")
 
-        if classification.intent_type == "QUESTION":
-            reply_text = classification.immediate_reply
-            if not reply_text:
-                org_status = self.get_organization_status(db)
-                reply_text = (
-                    f"Hello! VICKY OS is running with {org_status.active_projects_count} active projects, "
-                    f"{org_status.running_tasks_count} running tasks, and {org_status.pending_approvals_count} pending approvals. "
-                    f"How can the organization assist you?"
-                )
+        if classification.intent_type != "PROJECT":
+            reply_text = self.pa_answer_query(db, user_message)
             pa_response = PAResponse(
                 message=reply_text,
                 intent=classification.intent_type,
-                action_taken="Answered question directly from organizational context.",
+                action_taken="Answered question from live organizational context.",
                 severity="INFO",
             )
             MessageService.create_message(
